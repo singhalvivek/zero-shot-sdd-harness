@@ -201,7 +201,11 @@ def do_run() -> None:
     print()
     env = os.environ.copy()
     env["PYTHONPATH"] = str(ROOT / "src")
-    os.execvpe("uv", ["uv", "run", "uvicorn", "api:app", "--host", "0.0.0.0", "--port", "8001"], env)
+    result = subprocess.run(
+        ["uv", "run", "uvicorn", "api:app", "--host", "0.0.0.0", "--port", "8001"],
+        env=env,
+    )
+    sys.exit(result.returncode)
 
 
 # ── main ──────────────────────────────────────────────────────────────────────
