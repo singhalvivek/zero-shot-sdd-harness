@@ -1,68 +1,77 @@
 # Architecture
 
-> Fill in this section — see comments below.
-
 ---
 
 ## System Overview
 
-<!-- FILL IN: One paragraph describing the system at a high level. Who/what interacts with it? -->
+A single-user local web application. The Next.js frontend (served at `:8001/app/`) lets the user upload tabular files and ask natural-language questions. The FastAPI backend stores uploaded files locally, runs a LangGraph agent that plans an analysis, writes pandas code, executes it in an isolated local subprocess sandbox against the loaded dataframes, refines on error, and streams a plain-language answer back to the browser. Only schema and aggregate results are ever sent to the Gemini LLM; raw rows stay on the machine. Every query/answer is persisted to a SQLite audit log.
 
 ## Component Map
 
-<!-- FILL IN: List the major components and what each does. -->
-
 ```
-[Component A]
-    ↓
-[Component B]   ←→   [External Service]
-    ↓
-[Component C]
+[Next.js UI  :8001/app/]
+        │  upload file / ask (SSE stream)
+        ▼
+[FastAPI  :8001]  ──►  [LangGraph agent: plan→write_code→execute→refine→answer]
+        │                        │ schema + aggregate results only
+        │                        ▼
+        │                 [Gemini LLM]
+        │                        │ pandas code
+        │                        ▼
+        │              [Local pandas sandbox (subprocess)]  ◄── raw rows (local only)
+        ▼
+[SQLite: datasets / sessions / messages / audit_log]
 ```
 
 ## Layers
 
-<!-- FILL IN: Describe the layers of the system (e.g., API → Agent Loop → Tools → Storage). -->
-
 | Layer | Responsibility |
 |-------|----------------|
-| <!-- layer --> | <!-- responsibility --> |
+| API (FastAPI) | Upload handling, session routing, SSE streaming of answers |
+| Agent (LangGraph) | Plan → write code → execute → refine → answer loop; conversation memory |
+| Sandbox (subprocess) | Run generated pandas against loaded dataframes; capture result/stdout/error |
+| Storage (SQLite + SQLAlchemy) | Datasets metadata, sessions, message history, audit log |
+| LLM (Gemini provider) | Code generation + answer phrasing; receives schema/aggregates only |
 
 ## Data Flow
 
-<!-- FILL IN: Walk through the main data flow from trigger to output. -->
-
-1. Trigger: <!-- how does the agent start? (cron, webhook, user input, etc.) -->
-2. <!-- step 2 -->
-3. <!-- step 3 -->
-4. Output: <!-- what does the agent produce? -->
+1. Trigger: user uploads a file (`POST /datasets`) → stored under `data/uploads/`, schema profiled, `dataset` row created.
+2. User asks a question (`POST /sessions/{id}/ask`) → graph runs with the file schema + conversation history in state.
+3. `plan` proposes a strategy; `write_code` emits pandas; `execute` runs it in the sandbox; on error `refine` rewrites (bounded retries).
+4. `answer` turns the aggregate result into streamed plain language; query+answer+tokens persisted to `audit_log`.
+5. Output: streamed plain-language answer (SSE) shown in the UI; numbers called out.
 
 ## External Dependencies
 
-<!-- FILL IN: APIs, services, databases the agent depends on. -->
-
 | Dependency | Purpose | Failure Mode |
 |------------|---------|--------------|
-| <!-- name --> | <!-- what it does --> | <!-- what happens if it's down --> |
+| Gemini API | Plan, code generation, answer phrasing | Retry w/ backoff; surface error to user after retries exhausted |
+| Local subprocess (pandas) | Execute generated analysis code | Captured error fed back to `refine`; after max refines, graceful error answer |
 
 ## Stack
 
-> This project's concrete technology choices (captured at intake, filled by the spec-writer). The generic, every-project rules — model-naming, DB driver, dev port, test environment — live in `harness/patterns/tech-stack.md`; this section is only what **this** project picked.
+> Concrete choices for THIS project. Generic rules live in `harness/patterns/tech-stack.md`.
 
-- **Language:** <!-- FILL IN: e.g., Python 3.12 -->
-- **Agent framework:** <!-- FILL IN: e.g., LangGraph / custom / none -->
-- **LLM provider + model:** <!-- FILL IN: e.g., Anthropic / claude-sonnet-4-6 -->
-- **Backend:** <!-- FILL IN: e.g., FastAPI / none -->
-- **Database + ORM:** <!-- FILL IN: e.g., PostgreSQL + SQLAlchemy 2.0 / none -->
-- **Frontend:** <!-- FILL IN: e.g., Next.js / none -->
-- **Dependency management:** <!-- FILL IN: e.g., uv + pyproject.toml -->
+- **Language:** Python 3.12+ (backend), TypeScript (frontend)
+- **Agent framework:** LangGraph
+- **LLM provider + model:** Gemini (`AGENT_LLM_PROVIDER=gemini`); model from `AGENT_LLM_MODEL`, provider default `gemini-3.1-pro`
+- **Backend:** FastAPI, served via `uv run python -m src` at `:8001`
+- **Database + ORM:** SQLite + SQLAlchemy 2.0 + Alembic (SQLite is the production DB here; tests use SQLite too)
+- **Frontend:** Next.js 15 + React 19 (static export, served at `:8001/app/`)
+- **Dependency management:** uv + pyproject.toml (Python); pnpm (frontend)
 
 | Key library | Version | Purpose |
 |-------------|---------|---------|
-| <!-- name --> | <!-- ver --> | <!-- purpose --> |
+| langgraph | latest | Agent graph + state |
+| google-genai | latest (already a dep) | Gemini provider |
+| pandas | latest | Local data analysis |
+| openpyxl | latest | Excel reading (Phase 3) |
+| sqlalchemy | 2.x | ORM |
+| alembic | latest | Migrations |
+| playwright | latest | Frontend E2E |
 
-**Avoid:** <!-- FILL IN: libraries/patterns explicitly off-limits, and why -->
+**Avoid:** sending raw dataframe rows to the LLM (privacy violation); `eval`/`exec` of LLM code in the main process (must be subprocess-isolated); any cloud data store or external export.
 
 ## Deployment Model
 
-<!-- FILL IN: How does this run? (local script, cloud function, long-running service, etc.) -->
+Long-running local service started with `uv run python -m src`; FastAPI serves both the API and the static Next.js export. Single user, single machine. Uploaded files and the SQLite DB live under `data/`.
