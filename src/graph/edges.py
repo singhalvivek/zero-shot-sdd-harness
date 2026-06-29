@@ -1,7 +1,18 @@
+from graph.nodes import MAX_REFINES
 from graph.state import AgentState
 
 
-def after_transform(state: AgentState) -> str:
+def route_after_plan(state: AgentState) -> str:
+    return "handle_error" if state.get("error") else "write_code"
+
+
+def route_after_execute(state: AgentState) -> str:
+    """ok -> answer; error & under cap -> refine; error & at cap -> answer (best-effort)."""
     if state.get("error"):
         return "handle_error"
-    return "finalize"
+    exec_result = state.get("exec_result") or {}
+    if exec_result.get("ok"):
+        return "answer"
+    if state.get("refine_count", 0) < MAX_REFINES:
+        return "refine"
+    return "answer"

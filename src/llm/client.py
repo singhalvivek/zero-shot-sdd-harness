@@ -33,3 +33,11 @@ class LLMClient:
 
     def call_model(self, prompt: str, *, system: str | None = None) -> str:
         return self._provider.call_model(prompt, system=system)
+
+    def call_model_with_usage(self, prompt: str, *, system: str | None = None) -> dict:
+        """Return {text, prompt_tokens, completion_tokens}."""
+        return self._provider.call_model_with_usage(prompt, system=system)
+
+    def stream_model(self, prompt: str, *, system: str | None = None):
+        """Yield {text} chunks then a final {usage: {prompt_tokens, completion_tokens}}."""
+        return self._provider.stream_model(prompt, system=system)
