@@ -36,3 +36,37 @@ def test_route_after_plan():
     from graph.edges import route_after_plan
     assert route_after_plan({}) == "write_code"
     assert route_after_plan({"error": "x"}) == "handle_error"
+
+
+def test_route_after_triage():
+    from graph.edges import route_after_triage
+    assert route_after_triage({}) == "plan"
+    assert route_after_triage({"needs_clarification": False}) == "plan"
+    assert route_after_triage({"needs_clarification": True}) == "clarify"
+
+
+def test_triage_is_entry_point():
+    """Graph entry point is triage (Phase-2 topology change)."""
+    from graph.agent import agentic_ai
+    # langgraph wires the entry point as an edge from START ("__start__").
+    assert "triage" in agentic_ai.nodes
+
+
+def test_parse_triage_clear_and_ambiguous():
+    from graph.nodes import parse_triage
+    assert parse_triage('{"clear": true}') == (True, None)
+    clear, q = parse_triage('{"clear": false, "question": "By which metric?"}')
+    assert clear is False
+    assert q == "By which metric?"
+    # malformed -> conservative pass-through
+    assert parse_triage("not json at all") == (True, None)
+    # fenced JSON still parses
+    assert parse_triage('```json\n{"clear": true}\n```') == (True, None)
+
+
+def test_parse_suggestions():
+    from graph.nodes import parse_suggestions
+    items = parse_suggestions('["A?", "B?", "C?", "D?"]')
+    assert items == ["A?", "B?", "C?"]  # capped at 3
+    assert parse_suggestions("garbage") == []
+    assert parse_suggestions('```json\n["X?", "Y?"]\n```') == ["X?", "Y?"]

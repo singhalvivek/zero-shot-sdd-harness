@@ -2,6 +2,11 @@ from graph.nodes import MAX_REFINES
 from graph.state import AgentState
 
 
+def route_after_triage(state: AgentState) -> str:
+    """needs_clarification -> clarify (END, return question); else -> plan."""
+    return "clarify" if state.get("needs_clarification") else "plan"
+
+
 def route_after_plan(state: AgentState) -> str:
     return "handle_error" if state.get("error") else "write_code"
 

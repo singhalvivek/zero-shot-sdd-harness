@@ -46,6 +46,22 @@ def build_plan_prompt(question: str, schemas: dict, messages: list | None = None
     )
 
 
+def build_triage_prompt(question: str, schemas: dict, messages: list | None = None) -> str:
+    return (
+        f"{format_messages(messages)}"
+        f"Schema:\n{format_schemas(schemas)}\n\n"
+        f"Question: {question}"
+    )
+
+
+def build_suggestions_prompt(question: str, result_repr: str, schemas: dict) -> str:
+    return (
+        f"Schema:\n{format_schemas(schemas)}\n\n"
+        f"Previous question: {question}\n\n"
+        f"Computed aggregate result:\n{result_repr}"
+    )
+
+
 def build_write_code_prompt(question: str, plan: str, schemas: dict) -> str:
     return (
         f"Schema:\n{format_schemas(schemas)}\n\n"

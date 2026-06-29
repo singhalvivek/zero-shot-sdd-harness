@@ -4,7 +4,10 @@ import { useRef, useState } from 'react'
 import { askQuestion, type AskEvent, type DatasetResult } from '@/lib/api'
 import { UploadPanel } from '@/components/UploadPanel'
 import { ConversationThread, type Turn } from '@/components/ConversationThread'
-import { ComingSoonBadge, StubCard } from '@/components/ComingSoon'
+import { AuditPanel } from '@/components/AuditPanel'
+import { ComingSoonBadge } from '@/components/ComingSoon'
+
+type View = 'chat' | 'audit'
 
 export default function Home() {
   const [dataset, setDataset] = useState<DatasetResult | null>(null)
@@ -13,6 +16,7 @@ export default function Home() {
   const [turns, setTurns] = useState<Turn[]>([])
   const [asking, setAsking] = useState(false)
   const [streamingStarted, setStreamingStarted] = useState(false)
+  const [view, setView] = useState<View>('chat')
   const turnCounter = useRef(0)
 
   const canAsk = !!dataset && !!sessionId && !!question.trim() && !asking
@@ -22,11 +26,10 @@ export default function Home() {
     setSessionId(d.session_id)
   }
 
-  async function handleAsk(e: React.FormEvent) {
-    e.preventDefault()
-    if (!canAsk || !sessionId) return
+  async function ask(rawQuestion: string) {
+    const q = rawQuestion.trim()
+    if (!q || !sessionId || asking) return
 
-    const q = question.trim()
     const turnId = `turn-${turnCounter.current++}`
     setTurns(prev => [...prev, { id: turnId, question: q, answer: '', status: 'streaming' }])
     setQuestion('')
@@ -37,6 +40,7 @@ export default function Home() {
       setTurns(prev => prev.map(t => (t.id === turnId ? { ...t, ...patch } : t)))
 
     let answer = ''
+    let clarifying = false
     const onEvent = (evt: AskEvent) => {
       switch (evt.type) {
         case 'token':
@@ -44,15 +48,31 @@ export default function Home() {
           answer += evt.text
           update({ answer })
           break
+        case 'clarify':
+          clarifying = true
+          update({ status: 'clarifying', clarify: evt.question })
+          break
+        case 'suggestions':
+          update({ suggestions: evt.items })
+          break
+        case 'usage':
+          update({ usage: { prompt_tokens: evt.prompt_tokens, completion_tokens: evt.completion_tokens } })
+          break
         case 'error':
           update({ status: 'error', error: evt.message })
-          // keep the question editable to retry
           setQuestion(q)
           break
         case 'done':
-          update({ status: 'complete' })
+          if (evt.status === 'needs_clarification' || clarifying) {
+            // clarifying turn is terminal-but-not-an-error; the clarify bubble stays shown.
+            update({ status: 'complete' })
+          } else if (evt.status === 'failed') {
+            update({ status: 'error', error: 'The agent failed. Please try again.' })
+            setQuestion(q)
+          } else {
+            update({ status: 'complete' })
+          }
           break
-        // usage/clarify/suggestions are received but their display is a P2 stub
         default:
           break
       }
@@ -72,6 +92,17 @@ export default function Home() {
     }
   }
 
+  async function handleAsk(e: React.FormEvent) {
+    e.preventDefault()
+    if (!canAsk) return
+    await ask(question)
+  }
+
+  function handleSuggestion(suggestion: string) {
+    if (asking || !sessionId) return
+    void ask(suggestion)
+  }
+
   return (
     <main className="mx-auto max-w-5xl px-4 py-8">
       <header className="mb-6 flex items-center justify-between">
@@ -85,70 +116,81 @@ export default function Home() {
         </div>
       </header>
 
-      {/* Top-level P2 stub tabs: audit log */}
+      {/* Top-level tabs: Chat console + real Audit log */}
       <nav className="mb-6 flex items-center gap-2 border-b border-gray-200 pb-2">
-        <span className="rounded-md bg-blue-50 px-3 py-1 text-sm font-medium text-blue-700">Console</span>
         <button
           type="button"
-          disabled
-          data-testid="audit-tab-stub"
-          aria-disabled="true"
-          className="flex cursor-not-allowed items-center gap-2 rounded-md px-3 py-1 text-sm text-gray-400 opacity-70"
+          data-testid="chat-tab"
+          onClick={() => setView('chat')}
+          className={`rounded-md px-3 py-1 text-sm font-medium transition-colors ${
+            view === 'chat' ? 'bg-blue-50 text-blue-700' : 'text-gray-500 hover:bg-gray-50'
+          }`}
+        >
+          Console
+        </button>
+        <button
+          type="button"
+          data-testid="audit-tab"
+          onClick={() => setView('audit')}
+          className={`rounded-md px-3 py-1 text-sm font-medium transition-colors ${
+            view === 'audit' ? 'bg-blue-50 text-blue-700' : 'text-gray-500 hover:bg-gray-50'
+          }`}
         >
           Audit log
-          <ComingSoonBadge>Coming soon</ComingSoonBadge>
         </button>
       </nav>
 
-      <div className="grid gap-6 md:grid-cols-[20rem_1fr]">
-        {/* Left: data source */}
-        <div className="space-y-4">
-          <UploadPanel dataset={dataset} sessionId={sessionId} onUploaded={onUploaded} />
-        </div>
+      {view === 'audit' ? (
+        <AuditPanel sessionId={sessionId} />
+      ) : (
+        <div className="grid gap-6 md:grid-cols-[20rem_1fr]">
+          {/* Left: data source */}
+          <div className="space-y-4">
+            <UploadPanel dataset={dataset} sessionId={sessionId} onUploaded={onUploaded} />
+          </div>
 
-        {/* Right: conversation */}
-        <div className="space-y-4">
-          <ConversationThread turns={turns} streamingStarted={streamingStarted} />
-
-          {/* STUB: clarifying-question area (real in P2) */}
-          <StubCard
-            label="Clarifying questions"
-            description="When your question is ambiguous, the agent will ask for clarification here."
-            badge="P2 — coming soon"
-          />
-
-          <form onSubmit={handleAsk} className="rounded-xl border border-gray-200 bg-white p-3 shadow-sm">
-            <textarea
-              data-testid="question-input"
-              className="w-full resize-none rounded-lg border border-gray-300 p-3 text-sm shadow-sm focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500 disabled:bg-gray-50"
-              rows={2}
-              placeholder={dataset ? 'Ask a question about your data…' : 'Upload a CSV first to ask a question'}
-              value={question}
-              onChange={e => setQuestion(e.target.value)}
-              disabled={!dataset || asking}
-              onKeyDown={e => {
-                if (e.key === 'Enter' && !e.shiftKey) {
-                  e.preventDefault()
-                  handleAsk(e)
-                }
-              }}
+          {/* Right: conversation */}
+          <div className="space-y-4">
+            <ConversationThread
+              turns={turns}
+              streamingStarted={streamingStarted}
+              onAskSuggestion={handleSuggestion}
+              disabled={asking}
             />
-            <div className="mt-2 flex items-center justify-between">
-              <span className="text-xs text-gray-400">
-                {dataset ? 'Press Enter to ask' : 'No dataset loaded'}
-              </span>
-              <button
-                type="submit"
-                data-testid="ask-button"
-                disabled={!canAsk}
-                className="rounded-lg bg-blue-600 px-5 py-2 text-sm font-medium text-white hover:bg-blue-700 disabled:opacity-50"
-              >
-                {asking ? 'Asking…' : 'Ask'}
-              </button>
-            </div>
-          </form>
+
+            <form onSubmit={handleAsk} className="rounded-xl border border-gray-200 bg-white p-3 shadow-sm">
+              <textarea
+                data-testid="question-input"
+                className="w-full resize-none rounded-lg border border-gray-300 p-3 text-sm shadow-sm focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500 disabled:bg-gray-50"
+                rows={2}
+                placeholder={dataset ? 'Ask a question about your data…' : 'Upload a CSV first to ask a question'}
+                value={question}
+                onChange={e => setQuestion(e.target.value)}
+                disabled={!dataset || asking}
+                onKeyDown={e => {
+                  if (e.key === 'Enter' && !e.shiftKey) {
+                    e.preventDefault()
+                    handleAsk(e)
+                  }
+                }}
+              />
+              <div className="mt-2 flex items-center justify-between">
+                <span className="text-xs text-gray-400">
+                  {dataset ? 'Press Enter to ask' : 'No dataset loaded'}
+                </span>
+                <button
+                  type="submit"
+                  data-testid="ask-button"
+                  disabled={!canAsk}
+                  className="rounded-lg bg-blue-600 px-5 py-2 text-sm font-medium text-white hover:bg-blue-700 disabled:opacity-50"
+                >
+                  {asking ? 'Asking…' : 'Ask'}
+                </button>
+              </div>
+            </form>
+          </div>
         </div>
-      </div>
+      )}
     </main>
   )
 }

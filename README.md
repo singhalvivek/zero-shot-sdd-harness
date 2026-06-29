@@ -56,13 +56,18 @@ uv run pytest                                  # backend unit + integration + e2
 cd frontend && pnpm exec playwright test       # frontend E2E against the live app at :8001/app/
 ```
 
-## What works today (Phase 1)
+## What works today (Phases 1–2)
 
-**Real:** upload one CSV → ask one natural-language question → streamed plain-language answer (numbers called out), produced by the real plan → write_code → execute (local pandas sandbox) → refine → answer loop. Every query/answer is persisted to an audit log with token counts.
+**Real (Phase 1):** upload one CSV → ask one natural-language question → streamed plain-language answer (numbers called out), produced by the real plan → write_code → execute (local pandas sandbox) → refine → answer loop. Every query/answer is persisted to an audit log with token counts.
+
+**Real (Phase 2):**
+- **Clarifying-question gate** — when a question is genuinely ambiguous, the agent pauses and asks a clarifying question instead of guessing; you answer with a normal follow-up.
+- **Follow-up suggestion chips** — 2–3 smart, clickable follow-up questions after each answer.
+- **Live token-usage badge** — real per-query prompt/completion token counts shown on each answer.
+- **Audit-log viewer** — an Audit tab listing past queries, answers, token counts, status, and timestamps (newest first).
 
 **Clearly-labelled "coming soon" stubs** (not yet functional, visibly disabled — never bugs):
 - Multi-file join/compare and Excel upload (Phase 3)
-- Clarifying-question gate, follow-up suggestion chips, live token-usage display, audit-log viewer (Phase 2)
 - Persistent multi-day session switcher (Phase 3)
 
 ## Privacy guarantee

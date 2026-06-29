@@ -20,9 +20,11 @@ from db.session import create_db_session
 from graph.agent import agentic_ai
 from graph.nodes import (
     MAX_REFINES,
+    generate_suggestions,
     node_execute,
     node_plan,
     node_refine,
+    node_triage,
     node_write_code,
 )
 from graph.prompting import build_answer_prompt, load_prompt
@@ -130,7 +132,10 @@ def run_ask(session_id: str, question: str) -> dict:
     started = time.monotonic()
     state, run_id = _prepare(session_id, question)
     final: AgentState = agentic_ai.invoke(state)
-    status = final.get("status", "completed")
+    if final.get("needs_clarification"):
+        status = "needs_clarification"
+    else:
+        status = final.get("status", "completed")
     _persist(final, status)
     _log.info(
         "ask.complete",
@@ -144,6 +149,9 @@ def run_ask(session_id: str, question: str) -> dict:
         "run_id": run_id,
         "status": status,
         "answer_text": final.get("answer_text", ""),
+        "suggestions": final.get("suggestions", []),
+        "needs_clarification": bool(final.get("needs_clarification")),
+        "clarifying_question": final.get("clarifying_question"),
         "prompt_tokens": final.get("prompt_tokens", 0),
         "completion_tokens": final.get("completion_tokens", 0),
         "exec_result": final.get("exec_result"),
@@ -152,7 +160,14 @@ def run_ask(session_id: str, question: str) -> dict:
 
 
 def _run_until_execute(state: AgentState) -> AgentState:
-    """Run plan -> write_code -> (execute <-> refine) using the node functions."""
+    """Run triage -> plan -> write_code -> (execute <-> refine) using the node funcs.
+
+    If triage flags ambiguity, returns early with needs_clarification set; the
+    caller must NOT run analysis in that case.
+    """
+    state = node_triage(state)
+    if state.get("needs_clarification"):
+        return state
     state = node_plan(state)
     if state.get("error"):
         return state
@@ -184,6 +199,18 @@ async def stream_ask(session_id: str, question: str) -> AsyncIterator[dict]:
     try:
         state = _run_until_execute(state)
 
+        if state.get("needs_clarification"):
+            cq = state.get("clarifying_question") or "Could you clarify your question?"
+            state["status"] = "needs_clarification"
+            state["answer_text"] = None
+            _persist(state, "needs_clarification")
+            yield {"event": "clarify", "data": {"question": cq}}
+            yield {
+                "event": "done",
+                "data": {"run_id": run_id, "status": "needs_clarification"},
+            }
+            return
+
         if state.get("error"):
             state["status"] = "failed"
             msg = "Sorry, I couldn't complete that analysis. Please try rephrasing."
@@ -210,9 +237,17 @@ async def stream_ask(session_id: str, question: str) -> AsyncIterator[dict]:
         state["answer_text"] = "".join(parts)
         state["prompt_tokens"] = state.get("prompt_tokens", 0) + usage["prompt_tokens"]
         state["completion_tokens"] = state.get("completion_tokens", 0) + usage["completion_tokens"]
+
+        # One extra non-streaming call for 2-3 follow-up suggestions (best-effort).
+        sug = generate_suggestions(state)
+        state["suggestions"] = sug["suggestions"]
+        state["prompt_tokens"] += sug["usage"]["prompt_tokens"]
+        state["completion_tokens"] += sug["usage"]["completion_tokens"]
+
         state["status"] = "completed"
         _persist(state, "completed")
 
+        yield {"event": "suggestions", "data": {"items": state["suggestions"]}}
         yield {
             "event": "usage",
             "data": {

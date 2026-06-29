@@ -8,7 +8,7 @@ documented, intentional P1 simplification.
 """
 from langgraph.graph import END, StateGraph
 
-from graph.edges import route_after_execute, route_after_plan
+from graph.edges import route_after_execute, route_after_plan, route_after_triage
 from graph.nodes import (
     node_answer,
     node_execute,
@@ -16,6 +16,7 @@ from graph.nodes import (
     node_handle_error,
     node_plan,
     node_refine,
+    node_triage,
     node_write_code,
 )
 from graph.state import AgentState
@@ -24,6 +25,7 @@ from graph.state import AgentState
 def _build_graph():
     g = StateGraph(AgentState)
 
+    g.add_node("triage", node_triage)
     g.add_node("plan", node_plan)
     g.add_node("write_code", node_write_code)
     g.add_node("execute", node_execute)
@@ -32,8 +34,11 @@ def _build_graph():
     g.add_node("finalize", node_finalize)
     g.add_node("handle_error", node_handle_error)
 
-    g.set_entry_point("plan")
+    g.set_entry_point("triage")
 
+    g.add_conditional_edges(
+        "triage", route_after_triage, {"plan": "plan", "clarify": END}
+    )
     g.add_conditional_edges(
         "plan", route_after_plan, {"write_code": "write_code", "handle_error": "handle_error"}
     )

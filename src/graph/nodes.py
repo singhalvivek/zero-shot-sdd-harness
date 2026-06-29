@@ -6,10 +6,15 @@ graph routes to handle_error. LLM calls go through LLMClient (real provider via
 """
 from __future__ import annotations
 
+import json
+import re
+
 from graph.prompting import (
     build_answer_prompt,
     build_plan_prompt,
     build_refine_prompt,
+    build_suggestions_prompt,
+    build_triage_prompt,
     build_write_code_prompt,
     extract_python,
     load_prompt,
@@ -29,6 +34,113 @@ def _accumulate_tokens(state: AgentState, usage: dict) -> dict:
         "completion_tokens": state.get("completion_tokens", 0)
         + usage.get("completion_tokens", 0),
     }
+
+
+def _extract_json(text: str) -> str:
+    """Strip code fences and pull the first JSON object/array out of the text."""
+    t = text.strip()
+    if t.startswith("```"):
+        # drop opening fence (optionally with a language tag) and closing fence
+        t = re.sub(r"^```[a-zA-Z]*\n?", "", t)
+        t = re.sub(r"\n?```$", "", t).strip()
+    return t
+
+
+def parse_triage(text: str) -> tuple[bool, str | None]:
+    """Parse the triage LLM output. Conservative: on any parse failure, treat as
+    clear (do NOT block a normal question on a malformed signal)."""
+    try:
+        data = json.loads(_extract_json(text))
+    except Exception:  # noqa: BLE001
+        # Fallback: look for an embedded object.
+        m = re.search(r"\{.*\}", text, re.DOTALL)
+        if not m:
+            return True, None
+        try:
+            data = json.loads(m.group(0))
+        except Exception:  # noqa: BLE001
+            return True, None
+    if not isinstance(data, dict):
+        return True, None
+    if data.get("clear", True):
+        return True, None
+    question = data.get("question") or "Could you clarify what you'd like to know?"
+    return False, str(question)
+
+
+def parse_suggestions(text: str) -> list[str]:
+    """Parse the suggestions LLM output into 2-3 strings. On failure, return []."""
+    try:
+        data = json.loads(_extract_json(text))
+    except Exception:  # noqa: BLE001
+        m = re.search(r"\[.*\]", text, re.DOTALL)
+        if not m:
+            return []
+        try:
+            data = json.loads(m.group(0))
+        except Exception:  # noqa: BLE001
+            return []
+    if not isinstance(data, list):
+        return []
+    items = [str(s).strip() for s in data if str(s).strip()]
+    return items[:3]
+
+
+def node_triage(state: AgentState) -> AgentState:
+    """Classify whether the question is answerable as-is or genuinely ambiguous.
+
+    Conservative by design: any parse failure or LLM error falls through as clear
+    so the golden analysis path is never blocked by triage.
+    """
+    try:
+        prompt = build_triage_prompt(
+            state["question"], state.get("schemas", {}), state.get("messages")
+        )
+        out = LLMClient().call_model_with_usage(prompt, system=load_prompt("triage"))
+        clear, clarifying = parse_triage(out["text"])
+        _log.info(
+            "node.triage",
+            run_id=state.get("run_id"),
+            needs_clarification=not clear,
+        )
+        return {
+            **state,
+            "needs_clarification": not clear,
+            "clarifying_question": clarifying,
+            **_accumulate_tokens(state, out),
+        }
+    except Exception as exc:  # noqa: BLE001
+        # Never block analysis on a triage failure.
+        _log.error("node.triage_failed", run_id=state.get("run_id"), error=str(exc))
+        return {**state, "needs_clarification": False, "clarifying_question": None}
+
+
+def generate_suggestions(state: AgentState) -> dict:
+    """One extra (non-streaming) LLM call to produce 2-3 follow-up suggestions,
+    grounded schema-only + aggregate result. Returns {suggestions, usage}.
+    Never raises — suggestions are best-effort."""
+    try:
+        exec_result = state.get("exec_result") or {}
+        result_repr = (
+            exec_result.get("result_repr") or exec_result.get("error") or "(no result)"
+        )
+        prompt = build_suggestions_prompt(
+            state["question"], result_repr, state.get("schemas", {})
+        )
+        out = LLMClient().call_model_with_usage(
+            prompt, system=load_prompt("suggestions")
+        )
+        items = parse_suggestions(out["text"])
+        return {
+            "suggestions": items,
+            "usage": {
+                "prompt_tokens": out.get("prompt_tokens", 0),
+                "completion_tokens": out.get("completion_tokens", 0),
+            },
+        }
+    except Exception as exc:  # noqa: BLE001
+        _log.error("node.suggestions_failed", run_id=state.get("run_id"), error=str(exc))
+        return {"suggestions": [], "usage": {"prompt_tokens": 0, "completion_tokens": 0}}
 
 
 def node_plan(state: AgentState) -> AgentState:
@@ -101,8 +213,14 @@ def node_answer(state: AgentState) -> AgentState:
         result_repr = exec_result.get("result_repr") or exec_result.get("error") or "(no result)"
         prompt = build_answer_prompt(state["question"], result_repr, state.get("messages"))
         out = LLMClient().call_model_with_usage(prompt, system=load_prompt("answer"))
+        state = {**state, "answer_text": out["text"], **_accumulate_tokens(state, out)}
         _log.info("node.answer", run_id=state.get("run_id"))
-        return {**state, "answer_text": out["text"], **_accumulate_tokens(state, out)}
+        sug = generate_suggestions(state)
+        return {
+            **state,
+            "suggestions": sug["suggestions"],
+            **_accumulate_tokens(state, sug["usage"]),
+        }
     except Exception as exc:  # noqa: BLE001
         return {**state, "error": f"answer failed: {exc}"}
 

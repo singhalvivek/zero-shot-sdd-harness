@@ -1,16 +1,29 @@
 'use client'
 
-import { ComingSoonBadge } from './ComingSoon'
+import type { Usage } from '@/lib/api'
 
 export interface Turn {
   id: string
   question: string
   answer: string
-  status: 'streaming' | 'complete' | 'error'
+  status: 'streaming' | 'complete' | 'error' | 'clarifying'
   error?: string | null
+  clarify?: string | null
+  suggestions?: string[]
+  usage?: Usage | null
 }
 
-export function ConversationThread({ turns, streamingStarted }: { turns: Turn[]; streamingStarted: boolean }) {
+export function ConversationThread({
+  turns,
+  streamingStarted,
+  onAskSuggestion,
+  disabled,
+}: {
+  turns: Turn[]
+  streamingStarted: boolean
+  onAskSuggestion: (question: string) => void
+  disabled: boolean
+}) {
   if (turns.length === 0) {
     return (
       <div data-testid="thread-empty" className="rounded-xl border border-dashed border-gray-200 bg-white p-8 text-center">
@@ -30,52 +43,77 @@ export function ConversationThread({ turns, streamingStarted }: { turns: Turn[];
             </div>
           </div>
 
-          {/* agent answer */}
+          {/* agent response: clarifying question, answer, or error */}
           <div className="flex justify-start">
-            <div
-              data-testid="answer-bubble"
-              className={`max-w-[85%] rounded-2xl rounded-bl-sm border px-4 py-3 text-sm whitespace-pre-wrap ${
-                turn.status === 'error'
-                  ? 'border-red-200 bg-red-50 text-red-700'
-                  : 'border-gray-200 bg-white text-gray-800'
-              }`}
-            >
-              {turn.status === 'error' ? (
-                <span data-testid="answer-error">{turn.error}</span>
-              ) : turn.answer ? (
-                <span data-testid="answer-text">{turn.answer}</span>
-              ) : turn.status === 'streaming' && streamingStarted ? (
-                <Spinner />
-              ) : (
-                <Spinner />
-              )}
-            </div>
+            {turn.status === 'clarifying' || turn.clarify ? (
+              <div
+                data-testid="clarify-bubble"
+                className="max-w-[85%] rounded-2xl rounded-bl-sm border border-amber-300 bg-amber-50 px-4 py-3 text-sm text-amber-900"
+              >
+                <div className="mb-1 flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wide text-amber-700">
+                  <svg className="h-3.5 w-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                    <circle cx="12" cy="12" r="10" />
+                    <path d="M9.1 9a3 3 0 0 1 5.8 1c0 2-3 3-3 3" strokeLinecap="round" />
+                    <path d="M12 17h.01" strokeLinecap="round" />
+                  </svg>
+                  I need a bit more detail
+                </div>
+                <span data-testid="clarify-text" className="whitespace-pre-wrap">
+                  {turn.clarify}
+                </span>
+                <p className="mt-2 text-xs text-amber-600">Reply in the box below to continue.</p>
+              </div>
+            ) : (
+              <div
+                data-testid="answer-bubble"
+                className={`max-w-[85%] rounded-2xl rounded-bl-sm border px-4 py-3 text-sm whitespace-pre-wrap ${
+                  turn.status === 'error'
+                    ? 'border-red-200 bg-red-50 text-red-700'
+                    : 'border-gray-200 bg-white text-gray-800'
+                }`}
+              >
+                {turn.status === 'error' ? (
+                  <span data-testid="answer-error">{turn.error}</span>
+                ) : turn.answer ? (
+                  <span data-testid="answer-text">{turn.answer}</span>
+                ) : (
+                  <Spinner />
+                )}
+              </div>
+            )}
           </div>
 
-          {/* per-turn P2 stubs: token-usage badge + follow-up chips */}
+          {/* per-turn: real token-usage badge + follow-up chips (live in P2) */}
           {turn.status === 'complete' && (
             <div className="flex flex-wrap items-center justify-start gap-2 pl-1">
-              <span
-                data-testid="token-usage-stub"
-                aria-disabled="true"
-                className="inline-flex cursor-not-allowed items-center gap-1.5 rounded-full border border-dashed border-gray-300 bg-gray-50 px-2 py-0.5 text-xs text-gray-400 opacity-70"
-              >
-                Token usage
-                <ComingSoonBadge>Coming soon</ComingSoonBadge>
-              </span>
-              {['Show the breakdown', 'Why is that?', 'Plot it'].map(chip => (
-                <button
-                  key={chip}
-                  type="button"
-                  disabled
-                  data-testid="followup-chip"
-                  aria-disabled="true"
-                  className="cursor-not-allowed rounded-full border border-dashed border-gray-300 bg-gray-50 px-3 py-0.5 text-xs text-gray-400 opacity-70"
+              {turn.usage && (
+                <span
+                  data-testid="token-usage-badge"
+                  title="Token usage for this query"
+                  className="inline-flex items-center gap-1.5 rounded-full border border-gray-200 bg-gray-50 px-2.5 py-0.5 text-xs font-medium text-gray-600"
                 >
-                  {chip}
-                </button>
-              ))}
-              <ComingSoonBadge>Follow-ups — coming soon</ComingSoonBadge>
+                  <svg className="h-3 w-3 text-gray-400" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                    <path d="M3 12h4l3 8 4-16 3 8h4" strokeLinecap="round" strokeLinejoin="round" />
+                  </svg>
+                  {turn.usage.prompt_tokens.toLocaleString()} prompt + {turn.usage.completion_tokens.toLocaleString()} completion tokens
+                </span>
+              )}
+              {turn.suggestions && turn.suggestions.length > 0 && (
+                <div data-testid="followup-chips" className="flex flex-wrap items-center gap-2">
+                  {turn.suggestions.map(chip => (
+                    <button
+                      key={chip}
+                      type="button"
+                      data-testid="followup-chip"
+                      disabled={disabled}
+                      onClick={() => onAskSuggestion(chip)}
+                      className="rounded-full border border-blue-200 bg-blue-50 px-3 py-0.5 text-xs font-medium text-blue-700 transition-colors hover:border-blue-300 hover:bg-blue-100 disabled:cursor-not-allowed disabled:opacity-50"
+                    >
+                      {chip}
+                    </button>
+                  ))}
+                </div>
+              )}
             </div>
           )}
         </div>

@@ -34,6 +34,49 @@ interface ApiEnvelope<T> {
   detail?: { message?: string }
 }
 
+export interface AuditEntry {
+  id: string
+  session_id: string
+  question: string
+  answer: string
+  prompt_tokens: number
+  completion_tokens: number
+  status: string
+  created_at: string
+}
+
+/** Fetch the audit log (newest-first). Optionally scope to one session. */
+export async function getAudit(sessionId?: string): Promise<AuditEntry[]> {
+  const qs = sessionId ? `?session_id=${encodeURIComponent(sessionId)}` : ''
+  // Bound the request so a slow/hung GET /audit never leaves the panel on an
+  // indefinite spinner — abort after 20s and surface the error state.
+  const controller = new AbortController()
+  const timer = setTimeout(() => controller.abort(), 20_000)
+  let res: Response
+  try {
+    res = await fetch(`/audit${qs}`, { signal: controller.signal })
+  } catch (e) {
+    if (e instanceof DOMException && e.name === 'AbortError') {
+      throw new Error('Could not load the audit log.')
+    }
+    throw new Error('Network error — is the server running?')
+  } finally {
+    clearTimeout(timer)
+  }
+
+  let body: ApiEnvelope<AuditEntry[]> | null = null
+  try {
+    body = await res.json()
+  } catch {
+    /* non-JSON body */
+  }
+
+  if (!res.ok || !body?.ok || !Array.isArray(body.data)) {
+    throw new Error('Could not load the audit log.')
+  }
+  return body.data
+}
+
 /** Upload a CSV. Returns the profiled dataset record. Throws Error with a user-facing message on failure. */
 export async function uploadDataset(file: File, sessionId?: string): Promise<DatasetResult> {
   const form = new FormData()
