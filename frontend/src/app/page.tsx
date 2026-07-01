@@ -1,29 +1,85 @@
 'use client'
 
 import { useRef, useState } from 'react'
-import { askQuestion, type AskEvent, type DatasetResult } from '@/lib/api'
-import { UploadPanel } from '@/components/UploadPanel'
+import { askQuestion, getSession, type AskEvent, type DatasetResult } from '@/lib/api'
+import { UploadPanel, type LoadedDataset } from '@/components/UploadPanel'
 import { ConversationThread, type Turn } from '@/components/ConversationThread'
 import { AuditPanel } from '@/components/AuditPanel'
-import { ComingSoonBadge } from '@/components/ComingSoon'
+import { SessionSwitcher } from '@/components/SessionSwitcher'
 
 type View = 'chat' | 'audit'
 
 export default function Home() {
-  const [dataset, setDataset] = useState<DatasetResult | null>(null)
+  const [datasets, setDatasets] = useState<LoadedDataset[]>([])
   const [sessionId, setSessionId] = useState<string | null>(null)
   const [question, setQuestion] = useState('')
   const [turns, setTurns] = useState<Turn[]>([])
   const [asking, setAsking] = useState(false)
   const [streamingStarted, setStreamingStarted] = useState(false)
   const [view, setView] = useState<View>('chat')
+  const [sessionsToken, setSessionsToken] = useState(0)
   const turnCounter = useRef(0)
 
-  const canAsk = !!dataset && !!sessionId && !!question.trim() && !asking
+  const hasData = datasets.length > 0
+  const canAsk = hasData && !!sessionId && !!question.trim() && !asking
+
+  function bumpSessions() {
+    setSessionsToken(t => t + 1)
+  }
 
   function onUploaded(d: DatasetResult) {
-    setDataset(d)
     setSessionId(d.session_id)
+    setDatasets(prev => {
+      // Replace if same dataset id (defensive), else append to the session's list.
+      const without = prev.filter(x => x.dataset_id !== d.dataset_id)
+      return [...without, { dataset_id: d.dataset_id, df_name: d.df_name, row_count: d.row_count, columns: d.columns }]
+    })
+    bumpSessions()
+  }
+
+  function startNewSession() {
+    setSessionId(null)
+    setDatasets([])
+    setTurns([])
+    setQuestion('')
+    setView('chat')
+    turnCounter.current = 0
+  }
+
+  async function resumeSession(id: string) {
+    try {
+      const detail = await getSession(id)
+      setSessionId(detail.session_id)
+      setDatasets(
+        detail.datasets.map(d => ({
+          dataset_id: d.dataset_id,
+          df_name: d.df_name,
+          filename: d.filename,
+          row_count: d.row_count,
+          columns: d.columns,
+        })),
+      )
+      // Rehydrate the conversation: pair user questions with their assistant answer.
+      const rebuilt: Turn[] = []
+      turnCounter.current = 0
+      for (const m of detail.messages) {
+        if (m.role === 'user') {
+          rebuilt.push({
+            id: `turn-${turnCounter.current++}`,
+            question: m.content,
+            answer: '',
+            status: 'complete',
+          })
+        } else if (m.role === 'assistant' && rebuilt.length > 0) {
+          rebuilt[rebuilt.length - 1].answer = m.content
+        }
+      }
+      setTurns(rebuilt)
+      setQuestion('')
+      setView('chat')
+    } catch {
+      // Surface nothing destructive — keep current state; the switcher shows its own errors.
+    }
   }
 
   async function ask(rawQuestion: string) {
@@ -64,7 +120,6 @@ export default function Home() {
           break
         case 'done':
           if (evt.status === 'needs_clarification' || clarifying) {
-            // clarifying turn is terminal-but-not-an-error; the clarify bubble stays shown.
             update({ status: 'complete' })
           } else if (evt.status === 'failed') {
             update({ status: 'error', error: 'The agent failed. Please try again.' })
@@ -80,7 +135,6 @@ export default function Home() {
 
     try {
       await askQuestion(sessionId, q, onEvent)
-      // ensure terminal state if the stream closed without an explicit done/error
       setTurns(prev =>
         prev.map(t => (t.id === turnId && t.status === 'streaming' ? { ...t, status: 'complete' } : t)),
       )
@@ -89,6 +143,7 @@ export default function Home() {
       setQuestion(q)
     } finally {
       setAsking(false)
+      bumpSessions()
     }
   }
 
@@ -110,13 +165,14 @@ export default function Home() {
           <h1 className="text-2xl font-bold tracking-tight">Personal Data Analysis Agent</h1>
           <p className="text-sm text-gray-500">Upload your data and ask questions in plain language.</p>
         </div>
-        <div className="flex items-center gap-2">
-          <span className="text-xs text-gray-400">Session</span>
-          <ComingSoonBadge>Switcher — coming soon</ComingSoonBadge>
-        </div>
+        <SessionSwitcher
+          activeSessionId={sessionId}
+          onResume={resumeSession}
+          onNewSession={startNewSession}
+          reloadToken={sessionsToken}
+        />
       </header>
 
-      {/* Top-level tabs: Chat console + real Audit log */}
       <nav className="mb-6 flex items-center gap-2 border-b border-gray-200 pb-2">
         <button
           type="button"
@@ -144,12 +200,10 @@ export default function Home() {
         <AuditPanel sessionId={sessionId} />
       ) : (
         <div className="grid gap-6 md:grid-cols-[20rem_1fr]">
-          {/* Left: data source */}
           <div className="space-y-4">
-            <UploadPanel dataset={dataset} sessionId={sessionId} onUploaded={onUploaded} />
+            <UploadPanel datasets={datasets} sessionId={sessionId} onUploaded={onUploaded} />
           </div>
 
-          {/* Right: conversation */}
           <div className="space-y-4">
             <ConversationThread
               turns={turns}
@@ -163,10 +217,10 @@ export default function Home() {
                 data-testid="question-input"
                 className="w-full resize-none rounded-lg border border-gray-300 p-3 text-sm shadow-sm focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500 disabled:bg-gray-50"
                 rows={2}
-                placeholder={dataset ? 'Ask a question about your data…' : 'Upload a CSV first to ask a question'}
+                placeholder={hasData ? 'Ask a question about your data…' : 'Upload a file first to ask a question'}
                 value={question}
                 onChange={e => setQuestion(e.target.value)}
-                disabled={!dataset || asking}
+                disabled={!hasData || asking}
                 onKeyDown={e => {
                   if (e.key === 'Enter' && !e.shiftKey) {
                     e.preventDefault()
@@ -175,9 +229,7 @@ export default function Home() {
                 }}
               />
               <div className="mt-2 flex items-center justify-between">
-                <span className="text-xs text-gray-400">
-                  {dataset ? 'Press Enter to ask' : 'No dataset loaded'}
-                </span>
+                <span className="text-xs text-gray-400">{hasData ? 'Press Enter to ask' : 'No dataset loaded'}</span>
                 <button
                   type="submit"
                   data-testid="ask-button"

@@ -103,7 +103,9 @@ export function AuditPanel({ sessionId }: { sessionId: string | null }) {
               <div className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-gray-400">
                 <span data-testid="audit-timestamp">{formatTimestamp(entry.created_at)}</span>
                 <span data-testid="audit-tokens">
-                  {entry.prompt_tokens.toLocaleString()} prompt + {entry.completion_tokens.toLocaleString()} completion tokens
+                  {entry.prompt_tokens == null && entry.completion_tokens == null
+                    ? '— tokens'
+                    : `${(entry.prompt_tokens ?? 0).toLocaleString()} prompt + ${(entry.completion_tokens ?? 0).toLocaleString()} completion tokens`}
                 </span>
               </div>
             </li>

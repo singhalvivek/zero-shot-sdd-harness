@@ -4,7 +4,7 @@
 
 ## Agent Architecture Pattern
 
-**Chosen:** Graph (LangGraph) with a bounded refine loop and a human-in-the-loop clarify checkpoint (Phase 2). A single graph runs `plan → write_code → execute → refine → answer`; the refine loop (execute ↔ refine) handles the iterative "try → see result → fix" behaviour, which a linear loop cannot express cleanly.
+**Chosen:** Graph (LangGraph) with a bounded refine loop and a runner-level human-in-the-loop clarify gate. A single graph runs `triage → plan → write_code → execute → refine → answer`; the refine loop (execute ↔ refine) handles the iterative "try → see result → fix" behaviour, which a linear loop cannot express cleanly. The graph is compiled **without a checkpointer** — conversation memory is provided by rehydrating prior message rows in the runner, and the clarify pause is a runner-level gate (triage→END), not a LangGraph interrupt (see Concurrency Model).
 
 ---
 
@@ -74,9 +74,9 @@ class AgentState(TypedDict, total=False):
 
 ## Nodes / Steps
 
-### `node_triage` (Phase 2)
+### `node_triage` (entry node)
 **Reads:** `question`, `schemas`, `messages`. **Writes:** `needs_clarification`, `clarifying_question`.
-**LLM call:** yes — classifies whether the question is answerable as-is. **Behaviour:** if ambiguous, sets `needs_clarification=True` and a clarifying question; the graph pauses (interrupt) and returns it to the user instead of planning.
+**LLM call:** yes — classifies whether the question is answerable as-is. **Behaviour:** if ambiguous, sets `needs_clarification=True` and a clarifying question; the triage conditional edge then routes to `END` (no planning). This is a **runner-level clarify gate**, not a LangGraph interrupt: the runner (`src/graph/runner.py` `_run_until_execute`) runs triage first and returns early when `needs_clarification` is set, so no analysis runs. The streaming runner emits an SSE `clarify` event followed by `done{status:"needs_clarification"}`; the user answers by sending a **new ask in the same session** (prior turns are rehydrated for context) — there is no in-graph pause/resume.
 
 ### `node_plan`
 **Reads:** `question`, `schemas`, `messages`. **Writes:** `plan`.
@@ -161,7 +161,9 @@ node_write_code ──► node_execute
 
 | Checkpoint | What is shown | Expected action | Timeout / default |
 |------------|---------------|-----------------|-------------------|
-| Clarify (P2) | The agent's clarifying question | User answers; new ask call resumes | None — user re-asks |
+| Clarify | The agent's clarifying question | User answers by sending a new ask in the same session | None — user re-asks |
+
+**Mechanism (runner gate, not a checkpointer interrupt):** the clarify pause is implemented at the runner level, not as a LangGraph interrupt/resume. `triage` is the graph entry node; when it sets `needs_clarification`, its conditional edge routes to `END` and `src/graph/runner.py` `_run_until_execute` returns early before any planning/execution. The streaming path emits an SSE `clarify` event then `done{status:"needs_clarification"}`. There is no suspended graph state to resume: the user's follow-up is a fresh ask on the same session, and the prior turns rehydrated from the `message` table supply the context that answers the clarifying question.
 
 ---
 
@@ -192,7 +194,9 @@ node_write_code ──► node_execute
 
 - **Run isolation:** single user; one ask per session processed at a time. Concurrent asks across sessions are run_id-scoped.
 - **Parallel nodes within a run:** none (sequential pipeline).
-- **Checkpointing:** LangGraph `SqliteSaver` keyed by `session_id` to support the Phase-2 clarify interrupt and conversation continuity.
+- **Checkpointing:** **none.** The StateGraph is compiled with **no checkpointer** (`graph.compile()`). Conversation continuity is provided by rehydrating prior `Message` rows from SQLite in the runner (`src/graph/runner.py` `_load_messages` → `state["messages"]`), not by a LangGraph `SqliteSaver`. Each ask starts a fresh graph run seeded with the rehydrated turns.
+
+> **Design note:** No checkpointer is intentional for this app. It is single-user and streaming-first, so there is no concurrent-run state to persist and no in-graph interrupt to resume. Conversation memory via DB message rehydration is simpler, keeps the streaming path clean, and makes the clarify flow a plain runner-level gate (triage→END on ambiguity, follow-up ask supplies the answer) rather than a checkpointer suspend/resume.
 
 ---
 
@@ -201,6 +205,7 @@ node_write_code ──► node_execute
 ```python
 graph = StateGraph(AgentState)
 
+graph.add_node("triage", node_triage)
 graph.add_node("plan", node_plan)
 graph.add_node("write_code", node_write_code)
 graph.add_node("execute", node_execute)
@@ -208,12 +213,15 @@ graph.add_node("refine", node_refine)
 graph.add_node("answer", node_answer)
 graph.add_node("finalize", node_finalize)
 graph.add_node("handle_error", node_handle_error)
-# P2: graph.add_node("triage", node_triage); set_entry_point("triage") + clarify edge
 
-graph.set_entry_point("plan")
+graph.set_entry_point("triage")
 
-graph.add_conditional_edges("plan",
-    lambda s: "handle_error" if s.get("error") else "write_code")
+# Ambiguous questions route to END — the runner-level clarify gate handles them
+# (no checkpointer interrupt); a clear question proceeds to plan.
+graph.add_conditional_edges("triage", route_after_triage,
+    {"plan": "plan", "clarify": END})
+graph.add_conditional_edges("plan", route_after_plan,
+    {"write_code": "write_code", "handle_error": "handle_error"})
 graph.add_edge("write_code", "execute")
 graph.add_conditional_edges("execute", route_after_execute,
     {"answer": "answer", "refine": "refine", "handle_error": "handle_error"})
@@ -222,5 +230,10 @@ graph.add_edge("answer", "finalize")
 graph.add_edge("finalize", END)
 graph.add_edge("handle_error", END)
 
-compiled_graph = graph.compile(checkpointer=SqliteSaver(...))
+# NO checkpointer — intentional (see Concurrency Model → Design note). Conversation
+# continuity is provided by rehydrating prior Message rows in the runner, and the
+# clarify pause is a runner-level gate (triage→END), not a checkpointer interrupt.
+compiled_graph = graph.compile()
 ```
+
+**Runner integration:** `src/graph/runner.py` seeds `state["messages"]` from the `message` table (DB rehydration) before each run, runs triage first, and returns early when `needs_clarification` is set — emitting an SSE `clarify` event then `done{status:"needs_clarification"}` instead of resuming an interrupted graph.

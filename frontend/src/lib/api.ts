@@ -34,13 +34,100 @@ interface ApiEnvelope<T> {
   detail?: { message?: string }
 }
 
+/** A session in the switcher list (GET /sessions). */
+export interface SessionSummary {
+  session_id: string
+  title: string
+  created_at: string
+  updated_at: string
+  dataset_count: number
+  datasets: string[]
+  message_count: number
+  last_question: string | null
+}
+
+/** One dataset loaded into a session. */
+export interface SessionDataset {
+  dataset_id: string
+  df_name: string
+  filename: string
+  row_count: number
+  columns: Column[]
+}
+
+/** A persisted conversation message. */
+export interface SessionMessage {
+  role: string
+  content: string
+}
+
+/** Full session detail (GET /sessions/{id}) used to resume. */
+export interface SessionDetail {
+  session_id: string
+  datasets: SessionDataset[]
+  messages: SessionMessage[]
+}
+
+/** List prior sessions, newest-first. Throws Error with a user-facing message on failure. */
+export async function listSessions(): Promise<SessionSummary[]> {
+  const controller = new AbortController()
+  const timer = setTimeout(() => controller.abort(), 20_000)
+  let res: Response
+  try {
+    res = await fetch('/sessions', { signal: controller.signal })
+  } catch (e) {
+    if (e instanceof DOMException && e.name === 'AbortError') {
+      throw new Error('Could not load your sessions.')
+    }
+    throw new Error('Network error — is the server running?')
+  } finally {
+    clearTimeout(timer)
+  }
+
+  let body: ApiEnvelope<SessionSummary[]> | null = null
+  try {
+    body = await res.json()
+  } catch {
+    /* non-JSON body */
+  }
+
+  if (!res.ok || !body?.ok || !Array.isArray(body.data)) {
+    throw new Error('Could not load your sessions.')
+  }
+  return body.data
+}
+
+/** Fetch one session's datasets + conversation to resume it. */
+export async function getSession(sessionId: string): Promise<SessionDetail> {
+  let res: Response
+  try {
+    res = await fetch(`/sessions/${encodeURIComponent(sessionId)}`)
+  } catch {
+    throw new Error('Network error — is the server running?')
+  }
+
+  let body: ApiEnvelope<SessionDetail> | null = null
+  try {
+    body = await res.json()
+  } catch {
+    /* non-JSON body */
+  }
+
+  if (!res.ok || !body?.ok || !body.data) {
+    throw new Error('Could not load this session.')
+  }
+  return body.data
+}
+
 export interface AuditEntry {
   id: string
   session_id: string
   question: string
-  answer: string
-  prompt_tokens: number
-  completion_tokens: number
+  // Nullable: an in-flight/failed run persists an AuditLog row with a running or
+  // failed status before (or without) an answer + token counts.
+  answer: string | null
+  prompt_tokens: number | null
+  completion_tokens: number | null
   status: string
   created_at: string
 }
@@ -77,7 +164,7 @@ export async function getAudit(sessionId?: string): Promise<AuditEntry[]> {
   return body.data
 }
 
-/** Upload a CSV. Returns the profiled dataset record. Throws Error with a user-facing message on failure. */
+/** Upload a CSV or Excel file. Returns the profiled dataset record. Throws Error with a user-facing message on failure. */
 export async function uploadDataset(file: File, sessionId?: string): Promise<DatasetResult> {
   const form = new FormData()
   form.append('file', file)
@@ -98,7 +185,7 @@ export async function uploadDataset(file: File, sessionId?: string): Promise<Dat
   }
 
   if (!res.ok || !body?.ok || !body.data) {
-    throw new Error('Could not read this file — is it a valid CSV?')
+    throw new Error('Could not read this file — is it a valid CSV or Excel file?')
   }
   return body.data
 }

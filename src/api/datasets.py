@@ -9,7 +9,7 @@ from pathlib import Path
 from fastapi import APIRouter, Depends, File, Form, UploadFile
 from sqlalchemy.orm import Session as OrmSession
 
-from analysis.loader import load_csv, profile_dataframe
+from analysis.loader import file_type_for, load_file, profile_dataframe
 from api._common import api_error, ok
 from db.models import Dataset, Session, SessionDataset
 from db.session import get_session
@@ -27,6 +27,33 @@ def _derive_df_name(filename: str) -> str:
     return cleaned
 
 
+_ALLOWED_SUFFIXES = (".csv", ".xlsx", ".xls")
+
+
+def _unique_df_name(session: OrmSession, session_id: str, name: str) -> str:
+    """Ensure df_name is unique within a session's bound datasets.
+
+    On collision, suffix with _2, _3, ... so the sandbox namespace has distinct
+    frames (e.g. a second `sales` becomes `sales_2`).
+    """
+    existing: set[str] = set()
+    binds = (
+        session.query(SessionDataset)
+        .filter(SessionDataset.session_id == session_id)
+        .all()
+    )
+    for bind in binds:
+        ds = session.get(Dataset, bind.dataset_id)
+        if ds is not None:
+            existing.add(ds.df_name)
+    if name not in existing:
+        return name
+    i = 2
+    while f"{name}_{i}" in existing:
+        i += 1
+    return f"{name}_{i}"
+
+
 @router.post("/datasets")
 async def upload_dataset(
     file: UploadFile = File(...),
@@ -34,8 +61,13 @@ async def upload_dataset(
     df_name: str | None = Form(default=None),
     session: OrmSession = Depends(get_session),
 ) -> dict:
-    if not (file.filename or "").lower().endswith(".csv"):
-        raise api_error("BAD_REQUEST", "Only CSV files are supported in Phase 1.", 400)
+    fname = (file.filename or "").lower()
+    if not fname.endswith(_ALLOWED_SUFFIXES):
+        raise api_error(
+            "BAD_REQUEST",
+            "Only CSV and Excel (.xlsx) files are supported.",
+            400,
+        )
 
     _UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
     dest = _UPLOAD_DIR / f"{uuid.uuid4().hex}_{Path(file.filename).name}"
@@ -46,18 +78,20 @@ async def upload_dataset(
     except Exception as exc:  # noqa: BLE001
         raise api_error("INTERNAL_ERROR", f"Failed to store file: {exc}", 500)
 
+    file_type = file_type_for(file.filename or dest.name)
+
     try:
-        df = load_csv(str(dest))
+        df = load_file(str(dest), file_type)
     except Exception as exc:  # noqa: BLE001
         dest.unlink(missing_ok=True)
-        raise api_error("BAD_REQUEST", f"Could not parse CSV: {exc}", 400)
+        kind = "Excel" if file_type == "xlsx" else "CSV"
+        raise api_error("BAD_REQUEST", f"Could not parse {kind}: {exc}", 400)
 
     if df.empty or len(df.columns) == 0:
         dest.unlink(missing_ok=True)
         raise api_error("BAD_REQUEST", "The uploaded table is empty.", 400)
 
     profile = profile_dataframe(df)
-    resolved_name = (df_name or "").strip() or _derive_df_name(file.filename)
 
     # Create session if none provided.
     if session_id:
@@ -66,16 +100,19 @@ async def upload_dataset(
             dest.unlink(missing_ok=True)
             raise api_error("NOT_FOUND", f"Session {session_id} not found.", 404)
     else:
-        sess = Session()
+        sess = Session(title=Path(file.filename).name if file.filename else None)
         session.add(sess)
         session.flush()
         session_id = sess.id
+
+    requested_name = (df_name or "").strip() or _derive_df_name(file.filename)
+    resolved_name = _unique_df_name(session, session_id, requested_name)
 
     dataset = Dataset(
         df_name=resolved_name,
         filename=Path(file.filename).name,
         file_path=str(dest),
-        file_type="csv",
+        file_type=file_type,
         row_count=profile["row_count"],
         schema_json=json.dumps(profile),
     )

@@ -15,6 +15,11 @@ import json
 import subprocess
 import sys
 
+# On Windows, suppress a flashing console window for the child interpreter and
+# ensure a clean spawn (Windows always spawns rather than forks, so it does not
+# inherit the parent's gRPC/absl background-thread state).
+_CREATE_NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+
 # The harness runs INSIDE the child process. It reads a JSON payload from stdin
 # containing the dataset paths and the user code, loads each CSV into a variable
 # named by its df_name key, execs the code, and prints the repr of `result`.
@@ -27,9 +32,15 @@ user_code = payload["code"]
 
 import pandas as pd
 
+def _load_frame(path):
+    lower = path.lower()
+    if lower.endswith(".xlsx") or lower.endswith(".xls"):
+        return pd.read_excel(path, sheet_name=0)
+    return pd.read_csv(path)
+
 namespace = {"pd": pd, "result": None}
 for df_name, path in dataset_paths.items():
-    namespace[df_name] = pd.read_csv(path)
+    namespace[df_name] = _load_frame(path)
 
 out = {"ok": False, "result_repr": "", "stdout": "", "error": None}
 buf = io.StringIO()
@@ -73,6 +84,7 @@ def run_pandas(
             capture_output=True,
             text=True,
             timeout=timeout,
+            creationflags=_CREATE_NO_WINDOW,
         )
     except subprocess.TimeoutExpired:
         return {

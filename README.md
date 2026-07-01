@@ -56,19 +56,18 @@ uv run pytest                                  # backend unit + integration + e2
 cd frontend && pnpm exec playwright test       # frontend E2E against the live app at :8001/app/
 ```
 
-## What works today (Phases 1–2)
+## What works today (Phases 1–3 — complete)
 
-**Real (Phase 1):** upload one CSV → ask one natural-language question → streamed plain-language answer (numbers called out), produced by the real plan → write_code → execute (local pandas sandbox) → refine → answer loop. Every query/answer is persisted to an audit log with token counts.
+Every capability is real. Nothing is stubbed.
 
-**Real (Phase 2):**
-- **Clarifying-question gate** — when a question is genuinely ambiguous, the agent pauses and asks a clarifying question instead of guessing; you answer with a normal follow-up.
-- **Follow-up suggestion chips** — 2–3 smart, clickable follow-up questions after each answer.
-- **Live token-usage badge** — real per-query prompt/completion token counts shown on each answer.
-- **Audit-log viewer** — an Audit tab listing past queries, answers, token counts, status, and timestamps (newest first).
-
-**Clearly-labelled "coming soon" stubs** (not yet functional, visibly disabled — never bugs):
-- Multi-file join/compare and Excel upload (Phase 3)
-- Persistent multi-day session switcher (Phase 3)
+- **Upload & ask (P1):** upload a CSV → ask a natural-language question → streamed plain-language answer with the key numbers called out, produced by the real plan → write_code → execute (local pandas sandbox) → refine → answer loop.
+- **Clarifying-question gate (P2):** on a genuinely ambiguous question the agent pauses and asks a clarifying question instead of guessing; you answer with a normal follow-up.
+- **Follow-up suggestion chips (P2):** 2–3 smart, clickable follow-up questions after each answer.
+- **Live token-usage badge (P2):** real per-query prompt/completion token counts on each answer.
+- **Audit-log viewer (P2):** an Audit tab listing past queries, answers, token counts, status, and timestamps (newest first).
+- **Multi-file analysis (P3):** upload several files into one session and ask questions that join/compare across them.
+- **Excel support (P3):** upload `.xlsx`/`.xls` files alongside CSV.
+- **Persistent session switcher (P3):** list past sessions and resume one — with its files and conversation history — across app restarts.
 
 ## Privacy guarantee
 

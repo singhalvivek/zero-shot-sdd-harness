@@ -95,7 +95,7 @@ export function ConversationThread({
                   <svg className="h-3 w-3 text-gray-400" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
                     <path d="M3 12h4l3 8 4-16 3 8h4" strokeLinecap="round" strokeLinejoin="round" />
                   </svg>
-                  {turn.usage.prompt_tokens.toLocaleString()} prompt + {turn.usage.completion_tokens.toLocaleString()} completion tokens
+                  {(turn.usage.prompt_tokens ?? 0).toLocaleString()} prompt + {(turn.usage.completion_tokens ?? 0).toLocaleString()} completion tokens
                 </span>
               )}
               {turn.suggestions && turn.suggestions.length > 0 && (
