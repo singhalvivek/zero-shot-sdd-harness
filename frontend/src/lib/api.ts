@@ -1,0 +1,299 @@
+// API client + SSE parsing for the Analysis Console.
+// Same-origin relative paths: FastAPI serves both the API and the static /app/ export.
+
+export interface Column {
+  name: string
+  dtype: string
+}
+
+export interface DatasetResult {
+  dataset_id: string
+  df_name: string
+  row_count: number
+  columns: Column[]
+  session_id: string
+}
+
+export interface Usage {
+  prompt_tokens: number
+  completion_tokens: number
+}
+
+// SSE events emitted by POST /sessions/{id}/ask
+export type AskEvent =
+  | { type: 'token'; text: string }
+  | { type: 'usage'; prompt_tokens: number; completion_tokens: number }
+  | { type: 'done'; run_id?: string; status?: string }
+  | { type: 'error'; message: string }
+  | { type: 'clarify'; question: string }
+  | { type: 'suggestions'; items: string[] }
+
+interface ApiEnvelope<T> {
+  ok: boolean
+  data?: T
+  detail?: { message?: string }
+}
+
+/** A session in the switcher list (GET /sessions). */
+export interface SessionSummary {
+  session_id: string
+  title: string
+  created_at: string
+  updated_at: string
+  dataset_count: number
+  datasets: string[]
+  message_count: number
+  last_question: string | null
+}
+
+/** One dataset loaded into a session. */
+export interface SessionDataset {
+  dataset_id: string
+  df_name: string
+  filename: string
+  row_count: number
+  columns: Column[]
+}
+
+/** A persisted conversation message. */
+export interface SessionMessage {
+  role: string
+  content: string
+}
+
+/** Full session detail (GET /sessions/{id}) used to resume. */
+export interface SessionDetail {
+  session_id: string
+  datasets: SessionDataset[]
+  messages: SessionMessage[]
+}
+
+/** List prior sessions, newest-first. Throws Error with a user-facing message on failure. */
+export async function listSessions(): Promise<SessionSummary[]> {
+  const controller = new AbortController()
+  const timer = setTimeout(() => controller.abort(), 20_000)
+  let res: Response
+  try {
+    res = await fetch('/sessions', { signal: controller.signal })
+  } catch (e) {
+    if (e instanceof DOMException && e.name === 'AbortError') {
+      throw new Error('Could not load your sessions.')
+    }
+    throw new Error('Network error — is the server running?')
+  } finally {
+    clearTimeout(timer)
+  }
+
+  let body: ApiEnvelope<SessionSummary[]> | null = null
+  try {
+    body = await res.json()
+  } catch {
+    /* non-JSON body */
+  }
+
+  if (!res.ok || !body?.ok || !Array.isArray(body.data)) {
+    throw new Error('Could not load your sessions.')
+  }
+  return body.data
+}
+
+/** Fetch one session's datasets + conversation to resume it. */
+export async function getSession(sessionId: string): Promise<SessionDetail> {
+  let res: Response
+  try {
+    res = await fetch(`/sessions/${encodeURIComponent(sessionId)}`)
+  } catch {
+    throw new Error('Network error — is the server running?')
+  }
+
+  let body: ApiEnvelope<SessionDetail> | null = null
+  try {
+    body = await res.json()
+  } catch {
+    /* non-JSON body */
+  }
+
+  if (!res.ok || !body?.ok || !body.data) {
+    throw new Error('Could not load this session.')
+  }
+  return body.data
+}
+
+export interface AuditEntry {
+  id: string
+  session_id: string
+  question: string
+  // Nullable: an in-flight/failed run persists an AuditLog row with a running or
+  // failed status before (or without) an answer + token counts.
+  answer: string | null
+  prompt_tokens: number | null
+  completion_tokens: number | null
+  status: string
+  created_at: string
+}
+
+/** Fetch the audit log (newest-first). Optionally scope to one session. */
+export async function getAudit(sessionId?: string): Promise<AuditEntry[]> {
+  const qs = sessionId ? `?session_id=${encodeURIComponent(sessionId)}` : ''
+  // Bound the request so a slow/hung GET /audit never leaves the panel on an
+  // indefinite spinner — abort after 20s and surface the error state.
+  const controller = new AbortController()
+  const timer = setTimeout(() => controller.abort(), 20_000)
+  let res: Response
+  try {
+    res = await fetch(`/audit${qs}`, { signal: controller.signal })
+  } catch (e) {
+    if (e instanceof DOMException && e.name === 'AbortError') {
+      throw new Error('Could not load the audit log.')
+    }
+    throw new Error('Network error — is the server running?')
+  } finally {
+    clearTimeout(timer)
+  }
+
+  let body: ApiEnvelope<AuditEntry[]> | null = null
+  try {
+    body = await res.json()
+  } catch {
+    /* non-JSON body */
+  }
+
+  if (!res.ok || !body?.ok || !Array.isArray(body.data)) {
+    throw new Error('Could not load the audit log.')
+  }
+  return body.data
+}
+
+/** Upload a CSV or Excel file. Returns the profiled dataset record. Throws Error with a user-facing message on failure. */
+export async function uploadDataset(file: File, sessionId?: string): Promise<DatasetResult> {
+  const form = new FormData()
+  form.append('file', file)
+  if (sessionId) form.append('session_id', sessionId)
+
+  let res: Response
+  try {
+    res = await fetch('/datasets', { method: 'POST', body: form })
+  } catch {
+    throw new Error('Network error — is the server running?')
+  }
+
+  let body: ApiEnvelope<DatasetResult> | null = null
+  try {
+    body = await res.json()
+  } catch {
+    /* non-JSON body */
+  }
+
+  if (!res.ok || !body?.ok || !body.data) {
+    throw new Error('Could not read this file — is it a valid CSV or Excel file?')
+  }
+  return body.data
+}
+
+/**
+ * Ask a question against a session and stream the answer.
+ * Consumes the text/event-stream via fetch + ReadableStream (EventSource cannot POST).
+ * Invokes `onEvent` for each parsed SSE event.
+ */
+export async function askQuestion(
+  sessionId: string,
+  question: string,
+  onEvent: (event: AskEvent) => void,
+  signal?: AbortSignal,
+): Promise<void> {
+  let res: Response
+  try {
+    res = await fetch(`/sessions/${sessionId}/ask`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Accept: 'text/event-stream' },
+      body: JSON.stringify({ question }),
+      signal,
+    })
+  } catch {
+    throw new Error('Network error — is the server running?')
+  }
+
+  if (!res.ok || !res.body) {
+    let msg = `Request failed (${res.status})`
+    try {
+      const j = await res.json()
+      if (j?.detail?.message) msg = j.detail.message
+    } catch {
+      /* ignore */
+    }
+    onEvent({ type: 'error', message: msg })
+    return
+  }
+
+  const reader = res.body.getReader()
+  const decoder = new TextDecoder()
+  let buffer = ''
+
+  while (true) {
+    const { value, done } = await reader.read()
+    if (done) break
+    buffer += decoder.decode(value, { stream: true })
+
+    // SSE frames are separated by a blank line.
+    let sep: number
+    while ((sep = indexOfFrameBoundary(buffer)) !== -1) {
+      const rawFrame = buffer.slice(0, sep)
+      buffer = buffer.slice(sep).replace(/^(\r?\n){2}/, '')
+      const evt = parseFrame(rawFrame)
+      if (evt) onEvent(evt)
+    }
+  }
+
+  // Flush any trailing frame without a terminating blank line.
+  const tail = parseFrame(buffer)
+  if (tail) onEvent(tail)
+}
+
+function indexOfFrameBoundary(buffer: string): number {
+  const a = buffer.indexOf('\n\n')
+  const b = buffer.indexOf('\r\n\r\n')
+  if (a === -1) return b
+  if (b === -1) return a
+  return Math.min(a, b)
+}
+
+/** Parse one SSE frame ("event: x\n data: {...}") into a typed AskEvent. */
+function parseFrame(frame: string): AskEvent | null {
+  let eventName = 'message'
+  const dataLines: string[] = []
+  for (const line of frame.split(/\r?\n/)) {
+    if (line.startsWith('event:')) eventName = line.slice(6).trim()
+    else if (line.startsWith('data:')) dataLines.push(line.slice(5).trim())
+  }
+  if (dataLines.length === 0) return null
+
+  let payload: Record<string, unknown> = {}
+  try {
+    payload = JSON.parse(dataLines.join('\n'))
+  } catch {
+    // token streams may send raw text rather than JSON
+    if (eventName === 'token') return { type: 'token', text: dataLines.join('\n') }
+    return null
+  }
+
+  switch (eventName) {
+    case 'token':
+      return { type: 'token', text: String(payload.text ?? '') }
+    case 'usage':
+      return {
+        type: 'usage',
+        prompt_tokens: Number(payload.prompt_tokens ?? 0),
+        completion_tokens: Number(payload.completion_tokens ?? 0),
+      }
+    case 'done':
+      return { type: 'done', run_id: payload.run_id as string, status: payload.status as string }
+    case 'error':
+      return { type: 'error', message: String(payload.message ?? 'The agent failed. Please try again.') }
+    case 'clarify':
+      return { type: 'clarify', question: String(payload.question ?? '') }
+    case 'suggestions':
+      return { type: 'suggestions', items: (payload.items as string[]) ?? [] }
+    default:
+      return null
+  }
+}
