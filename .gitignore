@@ -22,3 +22,5 @@ frontend/out/
 frontend/test-results/
 frontend/playwright-report/
 frontend/.playwright/
+.secrets/
+.mcp.json
