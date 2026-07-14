@@ -1,176 +1,74 @@
-# Zero Shot SDD Harness for Building Agents
+# AI CAD Studio
 
-Give it a one-line idea. Walk away with a working, tested, phased agent.
+> **All commands run from the repo root** (this directory — there is no subdirectory to `cd` into). The one exception is the two `frontend/` build/test commands, which explicitly `cd frontend` as noted.
 
-A lean, Claude-Code-native harness for building agentic software **spec-first**. One person with an idea and one API key can drive a real, production-shaped agent into existence — and a senior engineer opening the result finds a conventional, reviewable stack, not generated mush.
+Type a plain-English description of a mechanical part → Google **Gemini** writes **CadQuery** Python → the backend safely executes it into real parametric 3D geometry (with up to 3 self-repairs on failure) → exports **STL + STEP** → renders the part in an interactive in-browser **three.js** viewer, alongside the generated code, the repair log, and the token/cost. Local, single-user. Inspired by PartCAD and MakeIt3D.
 
----
-
-## The Spirit
-
-Six convictions the whole repo is built around:
-
-1. **Spec is the source of truth.** The spec is written before the code, always. When spec and code disagree, the spec wins and the code is fixed (`/zero-shot-sync`). Every AI session reads the same requirements instead of re-deriving them.
-2. **Built for two audiences at once.** A non-coder drives it with a single sentence; a senior engineer inherits a clean FastAPI + LangGraph stack they can read, review, and own. Neither audience is an afterthought.
-3. **Lean harness, not a framework.** `harness/` is engineering *mindfulness* — rules and patterns that keep every session consistent — deliberately Claude-Code-only and kept small. The product runtime stays provider-agnostic; the harness does not.
-4. **Smallest first-time-right win, phase by phase.** Each phase ships the smallest increment a human can actually test, and it must work the *first* time they test it — real on the tested path, with clearly-labelled stubs for everything still to come. No rough edges on the path you're handed.
-5. **A human gates every phase.** The build is autonomous *within* a phase and stops at each boundary for you to test the increment. You stay in control of what "done" means.
-6. **Real LLM/API or it doesn't count.** Gates, tests, and evals run against the real model with keys from `.env`. A stubbed pass is not a pass.
+Stack: Python 3.12 · FastAPI · LangGraph · SQLite · CadQuery (OpenCascade) · Next.js 15 + three.js. Single-origin: the built frontend is served by FastAPI at `/app`.
 
 ---
 
-## What This Is
+## Prerequisites
 
-A starting point for building AI agents spec-first. The repo ships with:
+- **Python 3.12** — pinned via `.python-version` (`3.12.10`). CadQuery's `cadquery-ocp` (OpenCascade) wheels require 3.11/3.12; **3.13 is not supported**. `uv` reads the pin automatically.
+- [`uv`](https://docs.astral.sh/uv/) for Python deps, and **`pnpm`** + Node ≥ 20 for the frontend.
+- A **Google Gemini API key** (Developer API, starts with `AIza…`) from https://aistudio.google.com/apikey.
 
-- A working **baseline agent** in `src/` (FastAPI + LangGraph + SQLite, provider-agnostic LLM — Anthropic or Gemini, `transform_text` as the capability slot) — tests pass out of the box
-- A **spec template** in `spec/` covering roadmap, architecture, capabilities, data model, API, UI, and agent graph
-- Three **zero-shot skills** (`/zero-shot-build`, `/zero-shot-fix`, `/zero-shot-sync`)
-- A four-agent **team** — agent-builder orchestrates (plans, fans out, owns git/PR); spec-writer is the single design authority; code-generator implements one slice per instance (parallelised); qa-auditor reviews and gates
-- Engineering rules and patterns in `harness/` so every Claude Code session is consistent
-- **Human testing gate between phases** — autonomous within a phase, you test each increment before the next starts
-
----
-
-## How to Use This
-
-### Step 1 — Clone
+## Setup
 
 ```bash
-git clone https://github.com/smallTechOrg/zero-shot-sdd-harness.git my-agent
-cd my-agent
-```
-
-### Step 2 — Open in Claude Code
-
-```bash
-claude
-```
-
-### Step 3 — Build
-
-```
-/zero-shot-build An agent that monitors my Shopify store for low-inventory products and drafts restock emails to suppliers
-```
-
-One intake round (scope, stack, API keys → fill `.env`), then the agent builds phase by phase and stops at each boundary for you to test.
-
----
-
-## What Happens (Intake → Phase by Phase)
-
-```
-Your idea
-    ↓
-INTAKE — scope, stack, LLM provider, constraints; fill .env with the required API key
-    ↓
-[spec-writer]  → Full spec: architecture + agent-graph + phased plan (self-reviewed)
-    ↓
-[agent-builder] → Feature branch + PR, scaffold
-    ↓
-per phase — all slices concurrently:
-    [code-generator: slice-a]  ──→  [qa-auditor: slice-a]  ─┐
-    [code-generator: slice-b]  ──→  [qa-auditor: slice-b]  ─┤→  commit + push
-    [code-generator: slice-c]  ──→  [qa-auditor: slice-c]  ─┘
-    ↓
-HUMAN TESTING GATE — exact run commands + expected result; you confirm before next phase
-    ↓
-(issue → qa-auditor classifies SPEC-vs-CODE → code-generator fixes → re-gate)
-    ↓
-repeat per phase → SHIP
-```
-
-Phase 1 is the smallest first-time-right win — real on the tested path, with labelled stubs for everything coming later. Each later phase wires one more stub into real functionality.
-
----
-
-## Repo Layout
-
-```
-src/                ← baseline agent (FastAPI + LangGraph + SQLite, Anthropic/Gemini)
-  api/              ← FastAPI routers (create_app, health, runs)
-  config/           ← Pydantic BaseSettings
-  db/               ← SQLAlchemy models + session
-  domain/           ← Pydantic request/response models
-  graph/            ← LangGraph nodes, edges, state, runner  ← CAPABILITY SLOT
-  llm/              ← LLM client + providers/ (anthropic, gemini)
-  prompts/          ← prompt templates (.md)
-  observability/
-frontend/           ← Next.js static export (served by FastAPI at /app)
-tests/
-  unit/             ← passes with no API key
-  integration/      ← requires real key in .env
-spec/               ← your spec: roadmap, architecture, capabilities/, data, api, ui, agent
-harness/
-  rules/            ← ai-agents, git, secret-hygiene
-  patterns/         ← spec-driven, phases, project-layout, tech-stack, code, test-driven, ui-ux, agentic-ai, engineering-practices
-.claude/
-  skills/           ← /zero-shot-build, /zero-shot-fix, /zero-shot-sync
-  agents/           ← agent-builder, spec-writer, code-generator, qa-auditor
-CLAUDE.md
-pyproject.toml
-alembic.ini        ← Alembic migrations (alembic/)
-agent.py            ← verify setup (default); --run to start the server
-.env.example
-```
-
-**Capability slot** — the three files to replace for your agent:
-- `src/graph/nodes.py` — replace `transform_text` with your logic
-- `src/prompts/transform.md` — replace with your system prompt
-- `frontend/src/app/page.tsx` — replace the transform form with your UI
-
-Everything else (graph wiring, API, DB, settings, tests) is already working.
-
----
-
-## Running the Baseline
-
-```bash
+# from the repo root
 cp .env.example .env
-# edit .env: set exactly ONE provider key —
-#   AGENT_ANTHROPIC_API_KEY=<your key>   or   AGENT_GEMINI_API_KEY=<your key>
-# the provider is auto-detected from whichever key is set
-uv sync
-python agent.py                        # verify tools, .env, deps, tests (default)
-python agent.py --run                  # migrations + frontend build + start server
+# edit .env and set:  AGENT_GEMINI_API_KEY=<your Gemini key>
+
+uv sync                 # installs the backend + CAD stack (downloads OpenCascade — large, first time only)
 ```
 
-Once running:
+## Run
+
+```bash
+# from the repo root
+cd frontend && pnpm install && pnpm build && cd ..   # builds the SPA into frontend/out/
+uv run alembic upgrade head                          # creates the SQLite schema (runs, parts, versions)
+uv run alembic current                               # verify — must print a revision hash, not blank
+uv run python -m src                                 # starts the server on http://localhost:8001
+```
+
+Then open **http://localhost:8001/app/**.
 
 | URL | What |
 |-----|------|
-| `http://localhost:8001/app/` | **UI** — transform form (the capability slot) |
-| `http://localhost:8001/health` | API health check |
-| `http://localhost:8001/docs` | Interactive API docs (Swagger) |
+| `http://localhost:8001/app/` | **AI CAD Studio UI** |
+| `http://localhost:8001/health` | Health check (`{"data":{"status":"ok"},"error":null}`) |
+| `http://localhost:8001/artifacts/...` | Served STL / STEP / code files |
 
-Tests:
+## Use it (Phase 1)
+
+1. Type a part description, e.g. **"a 60x40x10mm rectangular bracket with two 5mm mounting holes"**.
+2. Pick a model: **Flash 3.5** (higher quality, default) or **Flash Lite** (fastest/cheapest).
+3. Click **Generate**. In a few seconds the part renders in the 3D viewer (rotate / zoom / pan); the code panel shows the CadQuery source; the token/cost panel shows usage; download **STL / STEP / Code**. If the first attempt failed to execute, the repair panel shows what errored and what changed (up to 3 tries).
+
+> **Models:** this build uses `gemini-3.5-flash` (quality/default) and `gemini-3.1-flash-lite` (fast). Pro-tier models (`gemini-*-pro`) require a **billing-enabled** Gemini key — free-tier keys return quota errors — so the "quality" slot is currently the strongest available flash model. Add a pro id to `ALLOWED_MODEL_IDS` in `src/config/settings.py` once a billing-enabled key is in `.env`.
+
+**Coming in Phase 2** (currently visible but clearly labelled stubs — not bugs): natural-language "refine this part" follow-ups, an in-browser CadQuery code editor with re-run, and a browsable history gallery of past parts with thumbnails and their modification chains.
+
+## Tests
 
 ```bash
-uv run pytest tests/unit/ -v          # no key needed
-uv run pytest tests/ -v               # requires real key in .env
+# from the repo root — these hit the REAL Gemini API using the key in .env
+uv run pytest tests/phase1 -q      # the Phase 1 gate (generate -> exec -> export, real Gemini)
+uv run pytest -q                   # full suite (unit + sandbox + integration + phase1)
+
+# frontend golden-path E2E (server must be running per "Run" above)
+cd frontend && npx playwright test
 ```
 
----
+## Where things live
 
-## Rules AI Agents Follow
+- `src/graph/` — the generate → safety-check → execute → repair(≤3) → export **LangGraph** pipeline (`spec/agent.md`).
+- `src/sandbox.py` — the safety-critical piece: static safety check (rejects `os.`, `open(`, `subprocess`, … via AST + regex) + a **Windows-safe** (`multiprocessing` spawn + `terminate()` timeout) restricted-namespace executor that exports STL/STEP inside the child process.
+- `src/llm/providers/gemini.py` — per-request Gemini model, token/cost accounting, 429 backoff.
+- `generated_code/` and `artifacts/` — versioned CadQuery source, STL/STEP exports, and preview images (gitignored; created at runtime).
+- Full design in `spec/` (roadmap, architecture, agent graph, data, api, ui, capabilities).
 
-Full rules in `harness/rules/ai-agents.md`. Summary:
-
-- Read the full spec before writing any code
-- Never skip a phase; commit every logical unit
-- Tests run against the real LLM/API using keys from `.env` — stubbed runs do not count as passing
-- Each phase is tested by the human before the next phase starts
-- The build record is git history + the PR + the per-phase test-handoffs
-
----
-
-## FAQ
-
-**What if I already have a stack in mind?**
-State it in the idea: `/zero-shot-build [idea] — use Python + FastAPI + PostgreSQL`. Stack choices are binding.
-
-**What if something breaks?**
-Run `/zero-shot-fix [what's broken]` — qa-auditor classifies the problem (SPEC vs CODE), the right generator fixes it, qa-auditor re-gates.
-
-**What if spec and code drift?**
-Run `/zero-shot-sync` — qa-auditor classifies each divergence, generators fix, spec wins.
+Local, single-user, localhost-bound — no authentication, no cloud.
