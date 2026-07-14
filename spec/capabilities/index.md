@@ -1,38 +1,31 @@
 # Capabilities Index
 
-> **Boilerplate status:** The spec-writer sub-agent creates one file per capability in this directory. Each file describes exactly one discrete thing the agent can do.
+> One file per capability. Each describes exactly one discrete thing AI CAD Studio can do.
 
 ---
 
 ## What Is a Capability?
 
-A capability is a single, discrete action or behavior the agent performs. Examples:
-- "Search the web for companies matching criteria X"
-- "Draft a personalized email given a lead profile"
-- "Send a Slack notification when a threshold is crossed"
+A single, discrete action the app performs end-to-end for the user.
 
 ## Capabilities in This Project
 
-<!-- FILL IN: List capabilities here as they are defined. Each entry links to its spec file (no number prefix). -->
+| Capability | File | First real in |
+|-----------|------|---------------|
+| Generate a 3D part from plain English (generate → safe-exec → self-repair → export → view) | [generate_part.md](generate_part.md) | Phase 1 |
+| Modify an existing part with a natural-language follow-up (new version in the chain) | [modify_part.md](modify_part.md) | Phase 2 |
+| Hand-edit the CadQuery code and re-run it | [edit_and_rerun.md](edit_and_rerun.md) | Phase 2 |
+| Browse the history of past parts, versions and modification chains | [browse_history.md](browse_history.md) | Phase 2 |
 
-| Capability | File |
-|-----------|------|
-| <!-- name --> | [name.md](name.md) |
+Token/cost accounting and per-version file persistence are **outputs of** `generate_part` (not separate capabilities); they are visible from Phase 1. Preview thumbnails are produced during `browse_history` (Phase 2).
 
 ## How to Add a New Capability
 
-Run `/zero-shot-build [description]` on the existing spec. The spec-writer sub-agent will:
-1. Create a new file in this directory (`<name>.md`, no number prefix)
-2. Update this index
-3. Flag any dependencies on existing capabilities
-4. Self-review that it fits the architecture and data model before returning
+Run `/zero-shot-build [description]` on the existing spec. The spec-writer creates a new `<name>.md`, updates this index, and self-reviews fit against the architecture, data model and agent graph.
 
 ## Capability File Template
 
-Each capability file should answer:
 - **What it does** (one sentence)
-- **Inputs** (what data it receives)
-- **Outputs** (what it produces)
-- **External calls** (APIs, LLMs, databases it touches)
-- **Error cases** (what can go wrong and how it's handled)
-- **Success criteria** (how we test it)
+- **Inputs / Outputs / External calls**
+- **Business rules**
+- **Success criteria** (testable)
