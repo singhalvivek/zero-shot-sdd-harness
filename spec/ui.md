@@ -22,7 +22,7 @@ Single-page web app — Next.js 15 (App Router, static export) + React 19 + Tail
 | Element | Phase 1 | Detail |
 |---------|---------|--------|
 | Prompt textarea | REAL | Plain-English part description |
-| Model selector (`gemini-2.5-flash` / `gemini-2.5-pro`) | REAL | Dropdown; default flash |
+| Model selector (`gemini-3.5-flash` / `gemini-3.1-flash-lite`) | REAL | Dropdown; default flash |
 | Generate button | REAL | `POST /runs`; shows loading + "generating / executing / repairing (n/3)" status |
 | 3D viewer | REAL | three.js `STLLoader` + `OrbitControls` — rotate / zoom / pan; loads `stl_url` |
 | Code panel (collapsible, syntax-highlighted) | REAL | Read-only in Phase 1; shows `generated_code` |

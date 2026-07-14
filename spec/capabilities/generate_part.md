@@ -7,7 +7,7 @@ Turns a plain-English description of a mechanical part into real parametric 3D g
 | Input | Type | Source | Required |
 |-------|------|--------|----------|
 | prompt | string (natural-language part description) | user (prompt box) | yes |
-| model_id | enum `gemini-2.5-flash` \| `gemini-2.5-pro` | user (model selector) | yes |
+| model_id | enum `gemini-3.5-flash` \| `gemini-3.1-flash-lite` | user (model selector) | yes |
 | previous_code | string \| null | always null for this capability (set by `modify_part` / `edit_and_rerun`) | no |
 | mode | enum `generate` \| `modify` \| `edit` | fixed `generate` for this capability | no |
 

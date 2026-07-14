@@ -18,12 +18,12 @@
 
 | Node | Provider | Model ID | Rationale |
 |------|----------|----------|-----------|
-| `generate_code` | Google Gemini (`google-genai`) | `gemini-2.5-flash` **or** `gemini-2.5-pro` (per-request `model_id`) | User picks: flash = fast/cheap, pro = higher-quality geometry |
+| `generate_code` | Google Gemini (`google-genai`) | `gemini-3.5-flash` **or** `gemini-3.1-flash-lite` (per-request `model_id`) | User picks: `gemini-3.5-flash` = higher-quality geometry (default); `gemini-3.1-flash-lite` = fastest/cheapest |
 | `repair_on_error` | Google Gemini | same `model_id` as the run | Repair uses the same model the user chose |
 
 Model IDs are **passed explicitly** to `genai.Client(...).models.generate_content(model=model_id, ...)` via the existing `GeminiProvider` (constructed per-run with the chosen model), NOT the provider's hardcoded `DEFAULT_MODEL`. The key is `AGENT_GEMINI_API_KEY` from pydantic settings, passed to `genai.Client(api_key=...)`.
 
-> **Model-id verification:** `gemini-2.5-flash` and `gemini-2.5-pro` are the intended GA ids. The scaffold probe MUST confirm the exact current ids against the installed `google-genai` SDK / Gemini API before Phase 1 handoff and record the verified ids in `architecture.md` §Stack.
+> **Model-id verification — DONE at scaffold (2026-07-14):** `gemini-3.5-flash` and `gemini-3.1-flash-lite` were confirmed to generate successfully against the live Gemini API with the `.env` key. The intake-requested `gemini-2.5-flash`/`-flash-lite` return 404 ("no longer available to new users") and all pro-tier ids (`gemini-2.5-pro`, `gemini-pro-latest`, `gemini-3-pro-preview`) return 429 RESOURCE_EXHAUSTED (free-tier keys have no pro quota). The runner constructs `GeminiProvider` per-request with the chosen `model_id`.
 
 **Fallback behaviour:** Gemini unreachable / auth error / rate-limit → node sets `state["error"]`, routes to `handle_error` (HTTP 502 surfaced). No offline stub — tests call the real API with the `.env` key. A transient error may be retried once with backoff inside the provider call.
 
@@ -57,7 +57,7 @@ class AgentState(TypedDict, total=False):
     # Input (from the trigger)
     prompt: str                     # NL description (generate/modify); "" for edit
     previous_code: str | None       # prior version code (modify/edit); None for generate
-    model_id: str                   # "gemini-2.5-flash" | "gemini-2.5-pro"
+    model_id: str                   # "gemini-3.5-flash" | "gemini-3.1-flash-lite"
     mode: str                       # "generate" | "modify" | "edit"
 
     # Pipeline data (populated progressively)
@@ -189,7 +189,7 @@ None inside the graph — the human iterates *between* runs (review the part, th
 
 **Graph-level (`handle_error`):** sets `status="failed"`; the runner writes `runs.status="failed"`, `error_message`, and the partial result (repair log + last error) so the UI can explain the failure. Logs with `run_id`.
 
-**Resume / retry:** no checkpointer — runs are short. A failed run is not resumed; the user retries (possibly with `gemini-2.5-pro`).
+**Resume / retry:** no checkpointer — runs are short. A failed run is not resumed; the user retries (possibly with `gemini-3.1-flash-lite`).
 
 **Partial failure:** a failed **thumbnail** upload (Phase 2) is logged and ignored (gallery shows a placeholder) — non-critical. Everything on the generate path is fatal-or-repair.
 

@@ -8,7 +8,7 @@ Refines an existing part with a natural-language follow-up ("make the holes 6mm"
 |-------|------|--------|----------|
 | part_id | string | selected part (viewer / history) | yes |
 | prompt | string (the follow-up instruction) | user (follow-up box) | yes |
-| model_id | enum `gemini-2.5-flash` \| `gemini-2.5-pro` | user (model selector) | yes |
+| model_id | enum `gemini-3.5-flash` \| `gemini-3.1-flash-lite` | user (model selector) | yes |
 
 The prior version's `generated_code` is loaded server-side and passed as `previous_code` — this is the iterative memory: the model receives the code it is modifying, not a blank slate.
 

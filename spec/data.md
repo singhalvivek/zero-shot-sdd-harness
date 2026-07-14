@@ -47,7 +47,7 @@ One row per successfully-persisted version (generate = v1, each modify/edit = +1
 | parent_version_id | Text (FK → versions.id) | no | Null for v1; set for modify/edit — the modification chain |
 | source | Text | yes | `generate` \| `modify` \| `edit` |
 | prompt | Text | no | The NL prompt for generate/modify; null for edit |
-| model_id | Text | no | `gemini-2.5-flash` \| `gemini-2.5-pro`; null for edit |
+| model_id | Text | no | `gemini-3.5-flash` \| `gemini-3.1-flash-lite`; null for edit |
 | code_path | Text | yes | Relative path to the CadQuery `.py` |
 | stl_path | Text | yes | Relative path to the STL |
 | step_path | Text | yes | Relative path to the STEP |

@@ -18,11 +18,11 @@ Phase 1 ships `POST /runs`, `GET /runs/{run_id}`, `GET /health`, and the `/artif
 ```json
 {
   "prompt": "a 60x40x10mm bracket with two 5mm mounting holes",
-  "model_id": "gemini-2.5-flash",
+  "model_id": "gemini-3.5-flash",
   "mode": "generate"
 }
 ```
-`mode` defaults to `generate`. `model_id` ∈ {`gemini-2.5-flash`, `gemini-2.5-pro`}.
+`mode` defaults to `generate`. `model_id` ∈ {`gemini-3.5-flash`, `gemini-3.1-flash-lite`}.
 
 **Response (`data`):**
 ```json
@@ -60,7 +60,7 @@ Returns the persisted result envelope (`runs.output_text`) for a prior run — s
 
 ## `POST /parts/{part_id}/modify`  — modify_part *(Phase 2)*
 
-**Request:** `{ "prompt": "make the holes 6mm", "model_id": "gemini-2.5-pro" }`
+**Request:** `{ "prompt": "make the holes 6mm", "model_id": "gemini-3.1-flash-lite" }`
 Server loads the latest (or specified) version's code as `previous_code`, runs the pipeline in `modify` mode, persists a new version linked to its parent. **Response:** same `data` shape as `POST /runs` with the incremented `version_number` and the parent linkage.
 
 Optional `{ "from_version": <n> }` to branch from a specific version (defaults to latest).

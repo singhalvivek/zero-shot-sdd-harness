@@ -20,3 +20,7 @@ data/
 # AI CAD Studio generated artifacts
 generated_code/
 artifacts/
+
+# Playwright artifacts
+frontend/test-results/
+frontend/playwright-report/
